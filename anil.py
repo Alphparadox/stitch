@@ -12,7 +12,7 @@ import argparse
 BASE_MODEL_PATH = "/home/naveenkumar/load/llava-model-local"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-BASE_IMAGE_DIR = "/home/naveenkumar/fyp"
+BASE_IMAGE_DIR = "/home/naveenkumar/stitch/image"
 
 
 def get_full_image_path(relative_path):
