@@ -88,7 +88,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate benchmark JSON from a directory of pre-named images.")
     parser.add_argument('--input_directory', type=str, required=True,
                         help='Path to the directory containing your pre-generated composite images.')
-    parser.add.argument('--output_directory', type=str, required=True,
+    # --- THIS IS THE FIX ---
+    # Changed parser.add.argument to parser.add_argument
+    parser.add_argument('--output_directory', type=str, required=True,
                         help='Path to save the generated benchmark_data.json file.')
     args = parser.parse_args()
 
