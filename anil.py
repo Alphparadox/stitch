@@ -9,7 +9,7 @@ import re
 BASE_MODEL_PATH = "/home/naveenkumar/load/llava-model-local"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BASE_IMAGE_DIR = "/home/naveenkumar/stitch"
-MODEL_INPUT_SIZE = 336  # Typical for recent LLaVA models
+MODEL_INPUT_SIZE = 336  # Standard for recent LLaVA models
 
 def get_full_image_path(relative_path):
     path = os.path.join(BASE_IMAGE_DIR, relative_path)
@@ -21,12 +21,10 @@ def load_benchmark_image(image_path):
     try:
         img = Image.open(image_path).convert("RGB")
         print("[Image] Path:", image_path, "| Size:", img.size)
-        # Check whether image is large enough for reasoning
         if img.size[0] < 200 or img.size[1] < 200:
             print(f"[WARNING] Image {image_path} may be too small for spatial reasoning.")
-        # Resize (preserve aspect ratio if needed) to model's input size
+        # Resize/canvas for exact input size, avoid cropping content
         if img.size != (MODEL_INPUT_SIZE, MODEL_INPUT_SIZE):
-            # Use thumbnail to retain full scene (less cropping risk than resize)
             img = img.copy()
             img.thumbnail((MODEL_INPUT_SIZE, MODEL_INPUT_SIZE), Image.LANCZOS)
             bg = Image.new("RGB", (MODEL_INPUT_SIZE, MODEL_INPUT_SIZE), (255, 255, 255))
@@ -37,21 +35,21 @@ def load_benchmark_image(image_path):
         print(f"[ERROR] Failed to load image {image_path}: {e}")
         return None
 
-def build_partitioned_option_transformation_prompt():
+def build_observational_prompt():
     return (
         "<image>\n"
-        "This puzzle shows a top row with a transformation (e.g., rotation, flip, view change) between left and right images.\n"
-        "Each option (A, B, and C) below has two images: a left image (input) and a right image (candidate result after transformation).\n\n"
-        "Step 1: Analyze the top row—clearly describe the transformation or rule, including angle and direction if a rotation is shown.\n"
-        "Step 2: For each option (A, B, C), describe what transformation occurs from left to right images. "
-        "Is it a rotation? What is the angle and direction? Is it a different kind of change?\n"
-        "Step 3: Compare the transformation in each option to the one in the top row. State whether it is the same or different.\n"
-        "Step 4: Select the option whose transformation most closely matches the top row.\n"
-        "End with: The correct option is [A/B/C]."
+        "Look carefully at the images. What transformation happens from left to right in the top row? "
+        "For each option (A, B, and C) below: does the change from left to right within the option match the top row's transformation? "
+        "Which option best matches? Only write: The correct option is [A/B/C]."
+    )
+
+def build_visual_debug_prompt():
+    return (
+        "<image>\n"
+        "Describe every object, animal, and transformation shown anywhere in this image. Be as detailed as possible."
     )
 
 def extract_answer(raw_text):
-    # Robust answer extraction for "The correct option is [A/B/C]"
     pattern = r"The correct option is\s*\[*([ABC])\]*"
     matches = re.findall(pattern, raw_text, flags=re.IGNORECASE)
     if matches:
@@ -61,7 +59,7 @@ def extract_answer(raw_text):
             return char
     return ""
 
-def run_kiva_benchmark(benchmark_data, model, processor):
+def run_kiva_benchmark(benchmark_data, model, processor, debug=False):
     print("\n--- LLaVA Visual Analogy Benchmark ---")
     correct = 0
     total = len(benchmark_data)
@@ -74,8 +72,8 @@ def run_kiva_benchmark(benchmark_data, model, processor):
                 print(f"[SKIP] No valid image for item {idx}")
                 continue
 
-            prompt = build_partitioned_option_transformation_prompt()
-            gt = sample["ground_truth_answer"].strip().upper()
+            prompt = build_visual_debug_prompt() if debug else build_observational_prompt()
+            gt = sample.get("ground_truth_answer", "").strip().upper()
 
             inputs = processor(
                 text=prompt,
@@ -85,29 +83,34 @@ def run_kiva_benchmark(benchmark_data, model, processor):
             print("[Batch] Tensor shape:", inputs['pixel_values'].shape)
 
             with torch.inference_mode():
-                output_ids = model.generate(**inputs, max_new_tokens=200)
+                output_ids = model.generate(**inputs, max_new_tokens=250 if debug else 150)
             raw_answer = processor.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
-            choice = extract_answer(raw_answer)
+            choice = extract_answer(raw_answer) if not debug else None
 
-            print(f"GT = {gt}")
-            print(f"Model raw answer:\n{raw_answer}\nChoice: {choice}")
-
-            if choice == gt:
-                print(f"CORRECT ✅")
-                correct += 1
+            print(f"GT = {gt}" if gt else "")
+            print(f"Model raw answer:\n{raw_answer}")
+            if not debug:
+                print(f"Extracted Choice: {choice}")
+                if choice == gt:
+                    print(f"CORRECT ✅")
+                    correct += 1
+                else:
+                    print(f"INCORRECT ❌ Expected: {gt}, Got: {choice or 'None'}")
             else:
-                print(f"INCORRECT ❌ Expected: {gt}, Got: {choice or 'None'}")
+                print("Debug mode: no answer extracted.")
 
         except Exception as e:
             print(f"[ERROR] Processing item {idx}: {e}")
 
-    acc = (correct / total) * 100 if total > 0 else 0
-    print(f"\n--- Benchmark Results ---")
-    print(f"Total: {total} | Correct: {correct} | Accuracy: {acc:.2f}%")
+    if not debug:
+        acc = (correct / total) * 100 if total > 0 else 0
+        print(f"\n--- Benchmark Results ---")
+        print(f"Total: {total} | Correct: {correct} | Accuracy: {acc:.2f}%")
 
 def main():
-    parser = argparse.ArgumentParser(description="Run LLaVA visual analogy benchmark (partitioned option, full image).")
+    parser = argparse.ArgumentParser(description="Run LLaVA visual analogy benchmark (direct prompt + debug mode).")
     parser.add_argument('--benchmark_file', type=str, required=True, help='Path to the benchmark JSON file')
+    parser.add_argument('--visual_debug', action='store_true', help='Use detailed visual debug prompt for model pipeline testing')
     args = parser.parse_args()
 
     print("Loading benchmark data...")
@@ -129,7 +132,7 @@ def main():
         print(f"[ERROR] Model loading: {e}")
         return
 
-    run_kiva_benchmark(data, model, processor)
+    run_kiva_benchmark(data, model, processor, debug=args.visual_debug)
 
 if __name__ == "__main__":
     main()
