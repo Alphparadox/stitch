@@ -6,13 +6,10 @@ import json
 import argparse
 import re
 
-# =============================================================================
-# LLaVA Visual Analogy Benchmark Runner (Rotation-Focused CoT Prompt Version)
-# =============================================================================
-
 BASE_MODEL_PATH = "/home/naveenkumar/load/llava-model-local"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BASE_IMAGE_DIR = "/home/naveenkumar/stitch"
+MODEL_INPUT_SIZE = 336  # Typical for recent LLaVA models
 
 def get_full_image_path(relative_path):
     path = os.path.join(BASE_IMAGE_DIR, relative_path)
@@ -23,53 +20,61 @@ def get_full_image_path(relative_path):
 def load_benchmark_image(image_path):
     try:
         img = Image.open(image_path).convert("RGB")
+        print("[Image] Path:", image_path, "| Size:", img.size)
+        # Check whether image is large enough for reasoning
+        if img.size[0] < 200 or img.size[1] < 200:
+            print(f"[WARNING] Image {image_path} may be too small for spatial reasoning.")
+        # Resize (preserve aspect ratio if needed) to model's input size
+        if img.size != (MODEL_INPUT_SIZE, MODEL_INPUT_SIZE):
+            # Use thumbnail to retain full scene (less cropping risk than resize)
+            img = img.copy()
+            img.thumbnail((MODEL_INPUT_SIZE, MODEL_INPUT_SIZE), Image.LANCZOS)
+            bg = Image.new("RGB", (MODEL_INPUT_SIZE, MODEL_INPUT_SIZE), (255, 255, 255))
+            bg.paste(img, ((MODEL_INPUT_SIZE-img.size[0])//2, (MODEL_INPUT_SIZE-img.size[1])//2))
+            img = bg
         return img
     except Exception as e:
         print(f"[ERROR] Failed to load image {image_path}: {e}")
         return None
 
-def build_cot_prompt_with_rotation_focus():
+def build_partitioned_option_transformation_prompt():
     return (
         "<image>\n"
-        "You are shown a visual analogy problem with two rows.\n\n"
-        "1. Carefully analyze the top row:\n"
-        "- Describe the left image in detail.\n"
-        "- Describe the right image in detail.\n"
-        "- Determine if any object was rotated, reflected, or transformed.\n"
-        "- If a rotation is present, estimate the angle (in degrees) and the direction (clockwise or counter-clockwise).\n"
-        "- Clearly state the transformation rule you observe (e.g., 'The top images differ by a 90-degree clockwise rotation').\n\n"
-        "2. Now, examine the bottom row:\n"
-        "- Focus on the left image. Imagine applying the same type of transformation (with the same degree and direction) to it.\n"
-        "- Describe your predicted result after applying the transformation.\n\n"
-        "3. Among the options (A, B, or C), which image shows the correct outcome after this specific transformation? Explain why the selected option matches the rule.\n\n"
-        "Finish your answer with: \"The correct option is [A/B/C].\""
+        "This puzzle shows a top row with a transformation (e.g., rotation, flip, view change) between left and right images.\n"
+        "Each option (A, B, and C) below has two images: a left image (input) and a right image (candidate result after transformation).\n\n"
+        "Step 1: Analyze the top row—clearly describe the transformation or rule, including angle and direction if a rotation is shown.\n"
+        "Step 2: For each option (A, B, C), describe what transformation occurs from left to right images. "
+        "Is it a rotation? What is the angle and direction? Is it a different kind of change?\n"
+        "Step 3: Compare the transformation in each option to the one in the top row. State whether it is the same or different.\n"
+        "Step 4: Select the option whose transformation most closely matches the top row.\n"
+        "End with: The correct option is [A/B/C]."
     )
 
 def extract_answer(raw_text):
+    # Robust answer extraction for "The correct option is [A/B/C]"
     pattern = r"The correct option is\s*\[*([ABC])\]*"
     matches = re.findall(pattern, raw_text, flags=re.IGNORECASE)
     if matches:
         return matches[-1].upper()
-    # Fallback: use last mention of A/B/C
     for char in reversed(raw_text.upper()):
         if char in "ABC":
             return char
     return ""
 
 def run_kiva_benchmark(benchmark_data, model, processor):
-    print(f"\n--- LLaVA Visual Analogy Benchmark ---")
+    print("\n--- LLaVA Visual Analogy Benchmark ---")
     correct = 0
     total = len(benchmark_data)
-
     for idx, sample in enumerate(benchmark_data, 1):
         print(f"\n[Item {idx}/{total}]")
         try:
             img_path = get_full_image_path(sample["image"])
             img = load_benchmark_image(img_path)
             if img is None:
+                print(f"[SKIP] No valid image for item {idx}")
                 continue
 
-            prompt = build_cot_prompt_with_rotation_focus()
+            prompt = build_partitioned_option_transformation_prompt()
             gt = sample["ground_truth_answer"].strip().upper()
 
             inputs = processor(
@@ -77,9 +82,10 @@ def run_kiva_benchmark(benchmark_data, model, processor):
                 images=[img],
                 return_tensors="pt"
             ).to(DEVICE)
+            print("[Batch] Tensor shape:", inputs['pixel_values'].shape)
 
             with torch.inference_mode():
-                output_ids = model.generate(**inputs, max_new_tokens=150)
+                output_ids = model.generate(**inputs, max_new_tokens=200)
             raw_answer = processor.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
             choice = extract_answer(raw_answer)
 
@@ -100,7 +106,7 @@ def run_kiva_benchmark(benchmark_data, model, processor):
     print(f"Total: {total} | Correct: {correct} | Accuracy: {acc:.2f}%")
 
 def main():
-    parser = argparse.ArgumentParser(description="Run LLaVA visual analogy benchmark (rotation-aware prompt).")
+    parser = argparse.ArgumentParser(description="Run LLaVA visual analogy benchmark (partitioned option, full image).")
     parser.add_argument('--benchmark_file', type=str, required=True, help='Path to the benchmark JSON file')
     args = parser.parse_args()
 
