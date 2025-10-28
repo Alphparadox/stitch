@@ -7,7 +7,7 @@ import argparse
 import re
 
 # =============================================================================
-# Improved LLaVA Benchmark Runner (CoT, Modular Prompt, Robust Parsing)
+# LLaVA Visual Analogy Benchmark Runner (Rotation-Focused CoT Prompt Version)
 # =============================================================================
 
 BASE_MODEL_PATH = "/home/naveenkumar/load/llava-model-local"
@@ -28,30 +28,33 @@ def load_benchmark_image(image_path):
         print(f"[ERROR] Failed to load image {image_path}: {e}")
         return None
 
-def build_cot_prompt():
-    # Modular reasoning structure for analogies
+def build_cot_prompt_with_rotation_focus():
     return (
         "<image>\n"
-        "You are shown a visual analogy puzzle problem.\n"
-        "<SUMMARY> Describe how the top left image transforms into the top right image. What rule is applied? </SUMMARY>\n"
-        "<CAPTION> List and describe all objects, orientations, and visual features in every panel. </CAPTION>\n"
-        "<REASONING> Apply the top row's transformation to the lower left image step-by-step. What should change? </REASONING>\n"
-        "<CONCLUSION> Select the correct option (A, B, or C) matching the transformation and explain your choice. End with: The correct option is [A/B/C]. </CONCLUSION>\n"
+        "You are shown a visual analogy problem with two rows.\n\n"
+        "1. Carefully analyze the top row:\n"
+        "- Describe the left image in detail.\n"
+        "- Describe the right image in detail.\n"
+        "- Determine if any object was rotated, reflected, or transformed.\n"
+        "- If a rotation is present, estimate the angle (in degrees) and the direction (clockwise or counter-clockwise).\n"
+        "- Clearly state the transformation rule you observe (e.g., 'The top images differ by a 90-degree clockwise rotation').\n\n"
+        "2. Now, examine the bottom row:\n"
+        "- Focus on the left image. Imagine applying the same type of transformation (with the same degree and direction) to it.\n"
+        "- Describe your predicted result after applying the transformation.\n\n"
+        "3. Among the options (A, B, or C), which image shows the correct outcome after this specific transformation? Explain why the selected option matches the rule.\n\n"
+        "Finish your answer with: \"The correct option is [A/B/C].\""
     )
 
 def extract_answer(raw_text):
-    # First, try strict regex on the expected conclusion phrase
     pattern = r"The correct option is\s*\[*([ABC])\]*"
     matches = re.findall(pattern, raw_text, flags=re.IGNORECASE)
     if matches:
         return matches[-1].upper()
     # Fallback: use last mention of A/B/C
-    candidate = ""
     for char in reversed(raw_text.upper()):
         if char in "ABC":
-            candidate = char
-            break
-    return candidate
+            return char
+    return ""
 
 def run_kiva_benchmark(benchmark_data, model, processor):
     print(f"\n--- LLaVA Visual Analogy Benchmark ---")
@@ -66,10 +69,9 @@ def run_kiva_benchmark(benchmark_data, model, processor):
             if img is None:
                 continue
 
-            prompt = build_cot_prompt()
+            prompt = build_cot_prompt_with_rotation_focus()
             gt = sample["ground_truth_answer"].strip().upper()
 
-            # Prepare input batch
             inputs = processor(
                 text=prompt,
                 images=[img],
@@ -77,7 +79,7 @@ def run_kiva_benchmark(benchmark_data, model, processor):
             ).to(DEVICE)
 
             with torch.inference_mode():
-                output_ids = model.generate(**inputs, max_new_tokens=120)
+                output_ids = model.generate(**inputs, max_new_tokens=150)
             raw_answer = processor.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
             choice = extract_answer(raw_answer)
 
@@ -98,7 +100,7 @@ def run_kiva_benchmark(benchmark_data, model, processor):
     print(f"Total: {total} | Correct: {correct} | Accuracy: {acc:.2f}%")
 
 def main():
-    parser = argparse.ArgumentParser(description="Run LLaVA visual analogy benchmark.")
+    parser = argparse.ArgumentParser(description="Run LLaVA visual analogy benchmark (rotation-aware prompt).")
     parser.add_argument('--benchmark_file', type=str, required=True, help='Path to the benchmark JSON file')
     args = parser.parse_args()
 
