@@ -18,10 +18,24 @@ import re
 # =============================================================================
 
 def generate_question_from_filename(transformation_str):
-    """Creates a simple question based on the transformation string."""
-    # Example: "2DRotation+90" becomes 
-    # "Which option (A, B, or C) shows the 2DRotation+90 transformation?"
-    return f"Which option (A, B, or C) shows the {transformation_str} transformation?"
+    """Creates a simple, generic question based on the transformation string."""
+    
+    # Make the question generic to force the model to analyze the transformation.
+    if "2DRotation" in transformation_str:
+        question_verb = "rotation"
+    elif "Reflect" in transformation_str:
+        question_verb = "reflection"
+    elif "Colour" in transformation_str:
+        question_verb = "colour"
+    elif "Resize" in transformation_str:
+        question_verb = "resize"
+    elif "Counting" in transformation_str:
+        question_verb = "counting"
+    else:
+        # Fallback for any other transformation types
+        question_verb = "correct" 
+
+    return f"Which option (A, B, or C) shows the {question_verb} transformation?"
 
 def generate_benchmark_json(input_directory, output_directory):
     """
