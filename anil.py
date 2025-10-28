@@ -6,7 +6,7 @@ import json
 import argparse
 
 # =============================================================================
-# LLaVA SINGLE-IMAGE BENCHMARK RUNNER SCRIPT
+# LLaVA SINGLE-IMAGE BENCHMARK RUNNER SCRIPT (Optimized Prompts)
 # =============================================================================
 
 BASE_MODEL_PATH = "/home/naveenkumar/load/llava-model-local"
@@ -55,10 +55,22 @@ def run_kiva_benchmark(benchmark_data, model, processor):
             question = item["question"]
             ground_truth = item["ground_truth_answer"].strip().upper()
 
-            prompt_content = f"""USER: <image>\n{question}
-Please answer with only the letter 'A', 'B', or 'C'.
+            # ================================================================
+            # 🧠 IMPROVED PROMPT FOR BETTER ACCURACY
+            # ================================================================
+            prompt_content = f"""SYSTEM: You are a vision expert AI that answers multiple-choice image reasoning questions correctly.
+
+USER: <image>
+{question}
+
+You are given three possible answers: (A), (B), and (C).
+Choose the correct option based only on the visual and textual information.
+Strictly respond with only one capital letter — 'A', 'B', or 'C'. 
+Do not explain or write anything else.
+
 ASSISTANT:"""
 
+            # ================================================================
             inputs = processor(
                 text=prompt_content,
                 images=[img],
@@ -66,7 +78,7 @@ ASSISTANT:"""
             ).to(DEVICE)
 
             with torch.inference_mode():
-                output_ids = model.generate(**inputs, max_new_tokens=10)
+                output_ids = model.generate(**inputs, max_new_tokens=20)
 
             model_answer_raw = processor.batch_decode(
                 output_ids, skip_special_tokens=True
