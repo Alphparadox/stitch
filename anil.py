@@ -48,15 +48,22 @@ def run_kiva_benchmark(benchmark_data, model, processor):
             continue
 
         try:
-            question = item["question"]
+            # We don't use the item["question"] because our new prompt is more robust
             gt = item["ground_truth_answer"].strip().upper()
 
             # ==========================================================
-            # ⚡ Optimized concise prompt for higher accuracy & speed
+            # ⚡ NEW/MODIFIED: Chain of Thought (CoT) Prompt
+            # This forces the model to analyze the rule and then apply it.
             # ==========================================================
-            prompt_content = f"""<image>\n{question}
-Answer only with the correct option: A, B, or C."""
+            prompt_content = f"""<image>
+The image shows a visual analogy problem.
+1. First, analyze the top example to find the transformation rule.
+2. Second, apply that exact rule to the left image in the bottom options.
+3. Finally, select the option (A, B, or C) that correctly shows the result.
 
+Explain your reasoning step-by-step and conclude with "The correct option is [letter]".
+"""
+            
             # ==========================================================
             inputs = processor(
                 text=prompt_content,
@@ -65,18 +72,30 @@ Answer only with the correct option: A, B, or C."""
             ).to(DEVICE)
 
             with torch.inference_mode():
-                output_ids = model.generate(**inputs, max_new_tokens=8)
+                # ==========================================================
+                # ⚡ NEW/MODIFIED: Increased max_new_tokens for reasoning
+                # ==========================================================
+                output_ids = model.generate(**inputs, max_new_tokens=150)
 
             ans_raw = processor.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
 
             if "ASSISTANT:" in ans_raw:
                 ans_raw = ans_raw.split("ASSISTANT:")[-1].strip()
 
-            print(f"Question: {question}")
             print(f"Ground Truth: {gt}")
             print(f"Model Answer (Raw): {ans_raw}")
+            
+            # ==========================================================
+            # ⚡ NEW/MODIFIED: Robust CoT Parsing
+            # We find the *last* mention of A, B, or C, as that
+            # will be in the conclusion after all the reasoning.
+            # ==========================================================
+            choice = ""
+            for char in reversed(ans_raw.upper()):
+                if char in ("A", "B", "C"):
+                    choice = char
+                    break
 
-            choice = next((c for c in ans_raw.upper() if c in ("A", "B", "C")), "")
             if choice == gt:
                 print(f"Result: CORRECT ✅ ({choice})")
                 correct += 1
