@@ -6,23 +6,21 @@ import json
 import argparse
 
 # =============================================================================
-# LLaVA SINGLE-IMAGE BENCHMARK RUNNER SCRIPT (Optimized Prompts)
+# LLaVA SINGLE-IMAGE BENCHMARK RUNNER SCRIPT (Fast & Accurate Version)
 # =============================================================================
 
 BASE_MODEL_PATH = "/home/naveenkumar/load/llava-model-local"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
 BASE_IMAGE_DIR = "/home/naveenkumar/stitch"
 
 
 def get_full_image_path(relative_path):
-    """Construct the absolute path for an image using the base directory."""
     return os.path.join(BASE_IMAGE_DIR, relative_path)
 
 
 def load_benchmark_image(image_path):
     if not os.path.exists(image_path):
-        print(f"Error: Image file not found at {image_path}")
+        print(f"Error: Image not found at {image_path}")
         return None
     try:
         return Image.open(image_path).convert("RGB")
@@ -33,7 +31,6 @@ def load_benchmark_image(image_path):
 
 def run_kiva_benchmark(benchmark_data, model, processor):
     print(f"\n--- Running Single-Image Benchmark on model: {BASE_MODEL_PATH} ---")
-
     correct = 0
     total = len(benchmark_data)
 
@@ -44,33 +41,23 @@ def run_kiva_benchmark(benchmark_data, model, processor):
     for idx, item in enumerate(benchmark_data, 1):
         print(f"\n--- Test Item {idx}/{total} ---")
 
-        image_path = get_full_image_path(item["image"])
-        img = load_benchmark_image(image_path)
-
+        img_path = get_full_image_path(item["image"])
+        img = load_benchmark_image(img_path)
         if not img:
             print(f"Skipping item {idx} due to missing image.")
             continue
 
         try:
             question = item["question"]
-            ground_truth = item["ground_truth_answer"].strip().upper()
+            gt = item["ground_truth_answer"].strip().upper()
 
-            # ================================================================
-            # 🧠 IMPROVED PROMPT FOR BETTER ACCURACY
-            # ================================================================
-            prompt_content = f"""SYSTEM: You are a vision expert AI that answers multiple-choice image reasoning questions correctly.
+            # ==========================================================
+            # ⚡ Optimized concise prompt for higher accuracy & speed
+            # ==========================================================
+            prompt_content = f"""<image>\n{question}
+Answer only with the correct option: A, B, or C."""
 
-USER: <image>
-{question}
-
-You are given three possible answers: (A), (B), and (C).
-Choose the correct option based only on the visual and textual information.
-Strictly respond with only one capital letter — 'A', 'B', or 'C'. 
-Do not explain or write anything else.
-
-ASSISTANT:"""
-
-            # ================================================================
+            # ==========================================================
             inputs = processor(
                 text=prompt_content,
                 images=[img],
@@ -78,77 +65,58 @@ ASSISTANT:"""
             ).to(DEVICE)
 
             with torch.inference_mode():
-                output_ids = model.generate(**inputs, max_new_tokens=20)
+                output_ids = model.generate(**inputs, max_new_tokens=8)
 
-            model_answer_raw = processor.batch_decode(
-                output_ids, skip_special_tokens=True
-            )[0].strip()
+            ans_raw = processor.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
 
-            if "ASSISTANT:" in model_answer_raw:
-                model_answer_raw = model_answer_raw.split("ASSISTANT:")[-1].strip()
+            if "ASSISTANT:" in ans_raw:
+                ans_raw = ans_raw.split("ASSISTANT:")[-1].strip()
 
             print(f"Question: {question}")
-            print(f"Ground Truth: {ground_truth}")
-            print(f"Model Answer (Raw): {model_answer_raw}")
+            print(f"Ground Truth: {gt}")
+            print(f"Model Answer (Raw): {ans_raw}")
 
-            model_choice = ""
-            for char in model_answer_raw.upper():
-                if char in ('A', 'B', 'C'):
-                    model_choice = char
-                    break
-
-            if model_choice == ground_truth:
-                print(f"Result: CORRECT ✅ (Model chose {model_choice})")
+            choice = next((c for c in ans_raw.upper() if c in ("A", "B", "C")), "")
+            if choice == gt:
+                print(f"Result: CORRECT ✅ ({choice})")
                 correct += 1
             else:
-                print(f"Result: INCORRECT ❌ (Expected: {ground_truth}, Got: {model_choice or 'None'})")
+                print(f"Result: INCORRECT ❌ (Expected: {gt}, Got: {choice or 'None'})")
 
         except Exception as e:
             print(f"Error processing item {idx}: {e}")
 
-    accuracy = (correct / total) * 100 if total > 0 else 0
+    acc = (correct / total) * 100 if total > 0 else 0
     print("\n--- Benchmark Complete ---")
     print(f"Total Items: {total}")
     print(f"Correct Predictions: {correct}")
-    print(f"Accuracy: {accuracy:.2f}%")
+    print(f"Accuracy: {acc:.2f}%")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Run LLaVA single-image benchmark from a JSON file.")
-    parser.add_argument('--benchmark_file', type=str, required=True,
-                        help='Path to the benchmark_data.json file.')
+    parser.add_argument('--benchmark_file', type=str, required=True, help='Path to benchmark_data.json')
     args = parser.parse_args()
 
-    print("--- PART 1: LOADING BENCHMARK DATA ---")
+    print("--- Loading Benchmark Data ---")
     try:
         with open(args.benchmark_file, 'r') as f:
             benchmark_data_list = json.load(f)
-        print(f"Loaded {len(benchmark_data_list)} items from {args.benchmark_file}")
+        print(f"Loaded {len(benchmark_data_list)} items.")
     except Exception as e:
-        print(f"CRITICAL ERROR: Could not load benchmark file from {args.benchmark_file}.")
-        print(f"Error: {e}")
+        print(f"Error loading benchmark file: {e}")
         return
 
-    print("\n--- PART 2: LOADING LLaVA MODEL ---")
-    print(f"Loading base LLaVA model from {BASE_MODEL_PATH}...")
-
+    print("\n--- Loading LLaVA Model ---")
     try:
         processor = AutoProcessor.from_pretrained(BASE_MODEL_PATH)
         dtype = torch.float16 if DEVICE == "cuda" else torch.float32
-
-        model = LlavaForConditionalGeneration.from_pretrained(
-            BASE_MODEL_PATH,
-            torch_dtype=dtype
-        ).to(DEVICE)
-
-        print(f"Model loaded to {DEVICE} ✅")
-
+        model = LlavaForConditionalGeneration.from_pretrained(BASE_MODEL_PATH, torch_dtype=dtype).to(DEVICE)
+        print(f"Model loaded on {DEVICE} ✅")
     except Exception as e:
-        print(f"CRITICAL ERROR: Could not load model from {BASE_MODEL_PATH}.")
-        print(f"Error: {e}")
+        print(f"Error loading model: {e}")
         return
 
-    # --- PART 3: Run Benchmark ---
     run_kiva_benchmark(benchmark_data_list, model, processor)
 
 
