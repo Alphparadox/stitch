@@ -7,7 +7,7 @@ import os
 MODEL_PATH = "/home/naveenkumar/load/llava-model-local"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # Use a direct, known, local path to the sample image
-SAMPLE_IMAGE_PATH = "/home/naveenkumar/stitch/2DRotation-90_19_0_-A.jpg"
+SAMPLE_IMAGE_PATH = "/home/naveenkumar/stitch/image/2DRotation-90_19_0_-A.jpg"
 MODEL_INPUT_SIZE = 336    # or 224 or 448 for some LLaVA versions
 
 def load_image_for_llava(image_path):
