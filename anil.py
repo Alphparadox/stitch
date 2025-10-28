@@ -4,140 +4,124 @@ from PIL import Image
 import os
 import json
 import argparse
+import re
 
 # =============================================================================
-# LLaVA SINGLE-IMAGE BENCHMARK RUNNER SCRIPT (Fast & Accurate Version)
+# Improved LLaVA Benchmark Runner (CoT, Modular Prompt, Robust Parsing)
 # =============================================================================
 
 BASE_MODEL_PATH = "/home/naveenkumar/load/llava-model-local"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BASE_IMAGE_DIR = "/home/naveenkumar/stitch"
 
-
 def get_full_image_path(relative_path):
-    return os.path.join(BASE_IMAGE_DIR, relative_path)
-
+    path = os.path.join(BASE_IMAGE_DIR, relative_path)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Image not found at: {path}")
+    return path
 
 def load_benchmark_image(image_path):
-    if not os.path.exists(image_path):
-        print(f"Error: Image not found at {image_path}")
-        return None
     try:
-        return Image.open(image_path).convert("RGB")
+        img = Image.open(image_path).convert("RGB")
+        return img
     except Exception as e:
-        print(f"Error reading image {image_path}: {e}")
+        print(f"[ERROR] Failed to load image {image_path}: {e}")
         return None
 
+def build_cot_prompt():
+    # Modular reasoning structure for analogies
+    return (
+        "<image>\n"
+        "You are shown a visual analogy puzzle problem.\n"
+        "<SUMMARY> Describe how the top left image transforms into the top right image. What rule is applied? </SUMMARY>\n"
+        "<CAPTION> List and describe all objects, orientations, and visual features in every panel. </CAPTION>\n"
+        "<REASONING> Apply the top row's transformation to the lower left image step-by-step. What should change? </REASONING>\n"
+        "<CONCLUSION> Select the correct option (A, B, or C) matching the transformation and explain your choice. End with: The correct option is [A/B/C]. </CONCLUSION>\n"
+    )
+
+def extract_answer(raw_text):
+    # First, try strict regex on the expected conclusion phrase
+    pattern = r"The correct option is\s*\[*([ABC])\]*"
+    matches = re.findall(pattern, raw_text, flags=re.IGNORECASE)
+    if matches:
+        return matches[-1].upper()
+    # Fallback: use last mention of A/B/C
+    candidate = ""
+    for char in reversed(raw_text.upper()):
+        if char in "ABC":
+            candidate = char
+            break
+    return candidate
 
 def run_kiva_benchmark(benchmark_data, model, processor):
-    print(f"\n--- Running Single-Image Benchmark on model: {BASE_MODEL_PATH} ---")
+    print(f"\n--- LLaVA Visual Analogy Benchmark ---")
     correct = 0
     total = len(benchmark_data)
 
-    if total == 0:
-        print("Benchmark dataset is empty.")
-        return
-
-    for idx, item in enumerate(benchmark_data, 1):
-        print(f"\n--- Test Item {idx}/{total} ---")
-
-        img_path = get_full_image_path(item["image"])
-        img = load_benchmark_image(img_path)
-        if not img:
-            print(f"Skipping item {idx} due to missing image.")
-            continue
-
+    for idx, sample in enumerate(benchmark_data, 1):
+        print(f"\n[Item {idx}/{total}]")
         try:
-            # We don't use the item["question"] because our new prompt is more robust
-            gt = item["ground_truth_answer"].strip().upper()
+            img_path = get_full_image_path(sample["image"])
+            img = load_benchmark_image(img_path)
+            if img is None:
+                continue
 
-            # ==========================================================
-            # ⚡ NEW/MODIFIED: Chain of Thought (CoT) Prompt
-            # This forces the model to analyze the rule and then apply it.
-            # ==========================================================
-            prompt_content = f"""<image>
-The image shows a visual analogy problem.
-1. First, analyze the top example to find the transformation rule.
-2. Second, apply that exact rule to the left image in the bottom options.
-3. Finally, select the option (A, B, or C) that correctly shows the result.
+            prompt = build_cot_prompt()
+            gt = sample["ground_truth_answer"].strip().upper()
 
-Explain your reasoning step-by-step and conclude with "The correct option is [letter]".
-"""
-            
-            # ==========================================================
+            # Prepare input batch
             inputs = processor(
-                text=prompt_content,
+                text=prompt,
                 images=[img],
                 return_tensors="pt"
             ).to(DEVICE)
 
             with torch.inference_mode():
-                # ==========================================================
-                # ⚡ NEW/MODIFIED: Increased max_new_tokens for reasoning
-                # ==========================================================
-                output_ids = model.generate(**inputs, max_new_tokens=150)
+                output_ids = model.generate(**inputs, max_new_tokens=120)
+            raw_answer = processor.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+            choice = extract_answer(raw_answer)
 
-            ans_raw = processor.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
-
-            if "ASSISTANT:" in ans_raw:
-                ans_raw = ans_raw.split("ASSISTANT:")[-1].strip()
-
-            print(f"Ground Truth: {gt}")
-            print(f"Model Answer (Raw): {ans_raw}")
-            
-            # ==========================================================
-            # ⚡ NEW/MODIFIED: Robust CoT Parsing
-            # We find the *last* mention of A, B, or C, as that
-            # will be in the conclusion after all the reasoning.
-            # ==========================================================
-            choice = ""
-            for char in reversed(ans_raw.upper()):
-                if char in ("A", "B", "C"):
-                    choice = char
-                    break
+            print(f"GT = {gt}")
+            print(f"Model raw answer:\n{raw_answer}\nChoice: {choice}")
 
             if choice == gt:
-                print(f"Result: CORRECT ✅ ({choice})")
+                print(f"CORRECT ✅")
                 correct += 1
             else:
-                print(f"Result: INCORRECT ❌ (Expected: {gt}, Got: {choice or 'None'})")
+                print(f"INCORRECT ❌ Expected: {gt}, Got: {choice or 'None'}")
 
         except Exception as e:
-            print(f"Error processing item {idx}: {e}")
+            print(f"[ERROR] Processing item {idx}: {e}")
 
     acc = (correct / total) * 100 if total > 0 else 0
-    print("\n--- Benchmark Complete ---")
-    print(f"Total Items: {total}")
-    print(f"Correct Predictions: {correct}")
-    print(f"Accuracy: {acc:.2f}%")
-
+    print(f"\n--- Benchmark Results ---")
+    print(f"Total: {total} | Correct: {correct} | Accuracy: {acc:.2f}%")
 
 def main():
-    parser = argparse.ArgumentParser(description="Run LLaVA single-image benchmark from a JSON file.")
-    parser.add_argument('--benchmark_file', type=str, required=True, help='Path to benchmark_data.json')
+    parser = argparse.ArgumentParser(description="Run LLaVA visual analogy benchmark.")
+    parser.add_argument('--benchmark_file', type=str, required=True, help='Path to the benchmark JSON file')
     args = parser.parse_args()
 
-    print("--- Loading Benchmark Data ---")
+    print("Loading benchmark data...")
     try:
-        with open(args.benchmark_file, 'r') as f:
-            benchmark_data_list = json.load(f)
-        print(f"Loaded {len(benchmark_data_list)} items.")
+        with open(args.benchmark_file, "r") as f:
+            data = json.load(f)
+        print(f"Loaded {len(data)} items.")
     except Exception as e:
-        print(f"Error loading benchmark file: {e}")
+        print(f"[ERROR] Benchmark data loading: {e}")
         return
 
-    print("\n--- Loading LLaVA Model ---")
+    print("Loading LLaVA model...")
     try:
         processor = AutoProcessor.from_pretrained(BASE_MODEL_PATH)
         dtype = torch.float16 if DEVICE == "cuda" else torch.float32
         model = LlavaForConditionalGeneration.from_pretrained(BASE_MODEL_PATH, torch_dtype=dtype).to(DEVICE)
-        print(f"Model loaded on {DEVICE} ✅")
+        print(f"Model ready on {DEVICE}.")
     except Exception as e:
-        print(f"Error loading model: {e}")
+        print(f"[ERROR] Model loading: {e}")
         return
 
-    run_kiva_benchmark(benchmark_data_list, model, processor)
-
+    run_kiva_benchmark(data, model, processor)
 
 if __name__ == "__main__":
     main()
