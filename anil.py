@@ -4,6 +4,7 @@ from PIL import Image
 import os
 import json
 import argparse
+import warnings
 
 # =============================================================================
 # LLaVA SINGLE-IMAGE BENCHMARK RUNNER SCRIPT
@@ -29,6 +30,19 @@ def load_benchmark_image(image_path):
     except Exception as e:
         print(f"Error reading image {image_path}: {e}")
         return None
+
+
+def clean_model_inputs(inputs):
+    """Remove unused parameters from model inputs to avoid warnings."""
+    # Create a copy of the inputs dictionary
+    cleaned_inputs = {}
+    
+    for key, value in inputs.items():
+        # Only keep the keys that the model actually uses
+        if key not in ['image_sizes']:
+            cleaned_inputs[key] = value
+    
+    return cleaned_inputs
 
 
 def run_kiva_benchmark(benchmark_data, model, processor):
@@ -59,18 +73,22 @@ def run_kiva_benchmark(benchmark_data, model, processor):
 Please answer with only the letter 'A', 'B', or 'C'.
 ASSISTANT:"""
 
+            # Process the inputs
             inputs = processor(
                 text=prompt_content,
                 images=[img],
                 return_tensors="pt"
             ).to(DEVICE)
 
-            # Remove 'image_sizes' from inputs if present
-            if 'image_sizes' in inputs:
-                del inputs['image_sizes']
+            # Clean the inputs to remove unused parameters
+            inputs = clean_model_inputs(inputs)
 
-            with torch.inference_mode():
-                output_ids = model.generate(**inputs, max_new_tokens=10)
+            # Suppress specific warnings if needed
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*image_sizes.*")
+                
+                with torch.inference_mode():
+                    output_ids = model.generate(**inputs, max_new_tokens=10)
 
             model_answer_raw = processor.batch_decode(
                 output_ids, skip_special_tokens=True
