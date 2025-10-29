@@ -66,9 +66,16 @@ def run_benchmark(benchmark_data, model, processor):
 
             prompt = build_prompt(question)
 
-            # --- THIS IS THE CORRECTED LINE ---
+            # ========================================================
+            # ▼▼▼ THIS IS THE ONLY LINE THAT CHANGED ▼▼▼
+            #
+            # We use explicit keywords (text=, images=)
+            # and wrap the single image in a list [img]
+            #
             inputs = processor(text=prompt, images=[img], return_tensors="pt").to(DEVICE)
-            # ------------------------------------
+            #
+            # ▲▲▲ THIS IS THE ONLY LINE THAT CHANGED ▲▲▲
+            # ========================================================
             
             print("[Batch] pixel_values:", inputs["pixel_values"].shape)
 
@@ -76,7 +83,7 @@ def run_benchmark(benchmark_data, model, processor):
                 output = model.generate(**inputs, max_new_tokens=50)
             raw_answer = processor.decode(output[0], skip_special_tokens=True).strip()
 
-            choice = extract_answer(raw_answer)
+            choice = extract_answer(raw_text)
             print(f"GT: {gt} | Model: {raw_answer} | Extracted: {choice}")
 
             if choice == gt:
