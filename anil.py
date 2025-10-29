@@ -32,17 +32,20 @@ def load_benchmark_image(image_path):
         return None
 
 
-def clean_model_inputs(inputs):
-    """Remove unused parameters from model inputs to avoid warnings."""
-    # Create a copy of the inputs dictionary
-    cleaned_inputs = {}
-    
-    for key, value in inputs.items():
-        # Only keep the keys that the model actually uses
-        if key not in ['image_sizes']:
-            cleaned_inputs[key] = value
-    
-    return cleaned_inputs
+def fix_image_tensor_shape(pixel_values):
+    """Fix the image tensor shape from 5D to 4D by removing the extra dimension."""
+    if pixel_values.dim() == 5:
+        print(f"Warning: Fixing 5D tensor shape {pixel_values.shape} to 4D")
+        # If shape is [1, 4, 3, 336, 336], we need to reshape to [4, 3, 336, 336] or [1, 3, 336, 336]
+        # Let's check which approach works better
+        if pixel_values.shape[1] == 4:  # [1, 4, 3, 336, 336]
+            # Option 1: Take the first image patch only
+            pixel_values = pixel_values[:, 0, :, :, :]  # Result: [1, 3, 336, 336]
+            print(f"Fixed tensor shape: {pixel_values.shape}")
+        else:
+            # If the structure is different, use a general approach
+            pixel_values = pixel_values.view(pixel_values.shape[0], *pixel_values.shape[2:])
+    return pixel_values
 
 
 def run_kiva_benchmark(benchmark_data, model, processor):
@@ -76,12 +79,22 @@ ASSISTANT:"""
             # Process the inputs
             inputs = processor(
                 text=prompt_content,
-                images=[img],
+                images=img,
                 return_tensors="pt"
-            ).to(DEVICE)
+            )
 
-            # Clean the inputs to remove unused parameters
-            inputs = clean_model_inputs(inputs)
+            # Fix the image tensor shape if needed
+            if 'pixel_values' in inputs:
+                inputs['pixel_values'] = fix_image_tensor_shape(inputs['pixel_values'])
+            
+            # Remove 'image_sizes' from inputs if present
+            if 'image_sizes' in inputs:
+                del inputs['image_sizes']
+
+            # Move to device after fixing shapes
+            inputs = {k: v.to(DEVICE) if hasattr(v, 'to') else v for k, v in inputs.items()}
+
+            print(f"Input pixel values shape: {inputs['pixel_values'].shape}")
 
             # Suppress specific warnings if needed
             with warnings.catch_warnings():
@@ -115,6 +128,8 @@ ASSISTANT:"""
 
         except Exception as e:
             print(f"Error processing item {idx}: {e}")
+            import traceback
+            traceback.print_exc()
 
     accuracy = (correct / total) * 100 if total > 0 else 0
     print("\n--- Benchmark Complete ---")
