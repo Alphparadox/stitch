@@ -65,6 +65,10 @@ ASSISTANT:"""
                 return_tensors="pt"
             ).to(DEVICE)
 
+            # Remove 'image_sizes' from inputs if present
+            if 'image_sizes' in inputs:
+                del inputs['image_sizes']
+
             with torch.inference_mode():
                 output_ids = model.generate(**inputs, max_new_tokens=10)
 
