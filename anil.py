@@ -66,7 +66,10 @@ def run_benchmark(benchmark_data, model, processor):
 
             prompt = build_prompt(question)
 
-            inputs = processor(prompt, img, return_tensors="pt").to(DEVICE)
+            # --- THIS IS THE CORRECTED LINE ---
+            inputs = processor(text=prompt, images=[img], return_tensors="pt").to(DEVICE)
+            # ------------------------------------
+            
             print("[Batch] pixel_values:", inputs["pixel_values"].shape)
 
             with torch.inference_mode():
