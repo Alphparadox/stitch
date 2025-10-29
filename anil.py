@@ -4,7 +4,7 @@ from PIL import Image
 import os
 
 # ============== CONFIGURE THESE ==============
-MODEL_PATH = "/home/naveenkumar/load/llava-model-local"
+MODEL_PATH = "/home/naveenkumar/load/llava-v1.6-vicuna-13b"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # Use a direct, known, local path to the sample image
 SAMPLE_IMAGE_PATH = "/home/naveenkumar/stitch/image/2DRotation180_39_2_(B).jpg"
